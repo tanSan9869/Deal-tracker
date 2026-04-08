@@ -1,0 +1,3 @@
+node_modules
+dist
+# .env # commented out so Vite can use it during build time

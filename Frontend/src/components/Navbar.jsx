@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { auth } from "../services/firebase";
-import { signOut } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 import { updateUserAvatar, getUserAvatar } from "../services/userService";
+import { supabase } from "../services/supabase";
 
 export default function Navbar() {
   const { currentUser } = useAuth();
@@ -15,16 +14,22 @@ export default function Navbar() {
 
   // Load avatar from Firestore
   useEffect(() => {
-    if (currentUser) {
-      getUserAvatar(currentUser.uid).then(storedAvatar => {
-        if (storedAvatar) {
-          setAvatar(storedAvatar);
-        } else if (currentUser.photoURL) {
-          setAvatar(currentUser.photoURL);
-        }
-      });
+  const fetchAvatar = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (user) {
+      const userId = user.id;
+
+      const avatar = await getUserAvatar(userId);
+
+      if (avatar) {
+        setAvatar(avatar);
+      }
     }
-  }, [currentUser]);
+  };
+
+  fetchAvatar();
+}, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -39,7 +44,7 @@ export default function Navbar() {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await supabase.auth.signOut();
       navigate("/");
     } catch (error) {
       console.error("Error logging out", error);
@@ -47,62 +52,39 @@ export default function Navbar() {
   };
 
   const handleFileChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const file = e.target.files[0];
+  if (!file) return;
 
-    setIsDropdownOpen(false);
+  try {
     setIsUploading(true);
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = async () => {
-        // Create a canvas to downscale the image
-        const canvas = document.createElement("canvas");
-        const MAX_WIDTH = 256;
-        const MAX_HEIGHT = 256;
-        let width = img.width;
-        let height = img.height;
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError) throw userError;
 
-        // Keep aspect ratio
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
-        }
+    const userId = userData?.user?.id;
+    if (!userId) throw new Error("You are not signed in. Please sign in again.");
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
+    const toBase64 =
+      (selectedFile) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(selectedFile);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+      });
 
-        // Convert back to a highly compressed base64 JPEG (e.g., 0.7 quality)
-        const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
-
-        try {
-          await updateUserAvatar(currentUser.uid, compressedBase64);
-          setAvatar(compressedBase64);
-        } catch (error) {
-          console.error("Error saving avatar to Firestore", error);
-          alert(`Database Error: ${error.message}\nMake sure your Firestore Database Rules allow writing to the "users" collection!`);
-        } finally {
-          setIsUploading(false);
-        }
-      };
-      img.onerror = () => {
-        alert("Failed to read the image file.");
-        setIsUploading(false);
-      };
-      img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
-  };
+    const base64Image = await toBase64(file);
+    await updateUserAvatar(userId, base64Image);
+    setAvatar(base64Image);
+    setIsDropdownOpen(false);
+  } catch (error) {
+    console.error("Avatar upload failed:", error);
+    alert(error?.message || "Failed to upload avatar. Please try again.");
+  } finally {
+    setIsUploading(false);
+    if (e.target) e.target.value = "";
+  }
+};
 
   const triggerFileInput = () => {
     document.getElementById('avatar-upload').click();

@@ -1,9 +1,7 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "../hooks/useAuth";
-import { createDeal, updateDeal } from "../services/dealService";
+import { addDeal, updateDeal } from "../services/dealService";
 
 export default function DealForm({ onDealSaved, initialData = null, onCancel }) {
-  const { currentUser } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     startupName: "",
@@ -15,7 +13,7 @@ export default function DealForm({ onDealSaved, initialData = null, onCancel }) 
   useEffect(() => {
     if (initialData) {
       setFormData({
-        startupName: initialData.startupName || "",
+        startupName: initialData.startupName || initialData.startup_name || "",
         stage: initialData.stage || "Idea",
         status: initialData.status || "Interested",
         notes: initialData.notes || ""
@@ -34,19 +32,18 @@ export default function DealForm({ onDealSaved, initialData = null, onCancel }) 
     if (!formData.startupName) return alert("Startup name is required");
     
     setIsSubmitting(true);
-    // Optimistically close the form right away!
-    onDealSaved();
     
     try {
       if (initialData && initialData.id) {
-        await updateDeal(currentUser.uid, initialData.id, formData);
+        await updateDeal(initialData.id, formData);
       } else {
-        await createDeal(currentUser.uid, formData);
+        await addDeal(formData);
       }
       setFormData({ startupName: "", stage: "Idea", status: "Interested", notes: "" });
+      onDealSaved();
     } catch (error) {
       console.error(error);
-      alert("Failed to save deal - Please try again.");
+      alert(error?.message || "Failed to save deal - Please try again.");
     } finally {
       setIsSubmitting(false);
     }

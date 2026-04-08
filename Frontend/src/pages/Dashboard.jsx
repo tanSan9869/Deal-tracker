@@ -1,9 +1,10 @@
+/* eslint-disable no-unused-vars */
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "../hooks/useAuth";
 import {
-  subscribeToUserDeals,
   deleteDeal,
   updateDeal,
+  getDeals,
 } from "../services/dealService";
 import DealForm from "../components/DealForm";
 import DealCard from "../components/DealCard";
@@ -17,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
+import { supabase } from "../services/supabase";
 
 export default function Dashboard() {
   const { currentUser } = useAuth();
@@ -31,39 +33,59 @@ export default function Dashboard() {
   const [filterStatus, setFilterStatus] = useState("All");
 
   useEffect(() => {
-    let unsubscribe;
-    if (currentUser) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+  const fetchDeals = async () => {
+    try {
       setIsLoading(true);
-      unsubscribe = subscribeToUserDeals(
-        currentUser.uid,
-        (data) => {
-          setDeals(data || []);
-          setIsLoading(false);
-        },
-        (error) => {
-          console.error("Firestore Error:", error);
-          setIsLoading(false); // Stop spinning even if there's a Firebase error
-        },
-      );
-    } else {
+
+      const { data, error } = await supabase
+        .from("deals")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const normalizedDeals = (data || []).map((deal) => ({
+        ...deal,
+        startupName: deal.startupName || deal.startup_name || deal.name || "",
+      }));
+
+      setDeals(normalizedDeals);
+    } catch (err) {
+      console.error("Supabase Error:", err);
+    } finally {
       setIsLoading(false);
-      setDeals([]);
-    }
-
-    // Cleanup the listener when the component unmounts
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, [currentUser]);
-
-  const handleDelete = async (id) => {
-    if (window.confirm("Are you sure you want to delete this deal?")) {
-      deleteDeal(currentUser.uid, id).catch((err) =>
-        console.error("Deletion failed:", err),
-      );
     }
   };
+  
+  fetchDeals();
+
+  const channel = supabase
+    .channel("deals")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "deals" },
+      () => {
+        fetchDeals(); // refresh
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+
+}, []);
+
+  const handleDelete = async (id) => {
+  if (window.confirm("Are you sure?")) {
+    setDeals((prev) => prev.filter((deal) => deal.id !== id));
+    try {
+      await deleteDeal(id);
+    } catch (err) {
+      console.error("Deletion failed:", err);
+    }
+  }
+};
 
   const handleEdit = (deal) => {
     setEditingDeal(deal);
@@ -84,7 +106,7 @@ export default function Dashboard() {
   const filteredDeals = useMemo(() => {
     return deals.filter((deal) => {
       // Safely access startupName or fallback to 'name' (for older deals added before the rename)
-      const nameForSearch = deal.startupName || deal.name || "";
+      const nameForSearch = deal.startup_name || deal.startupName || "";
 
       const matchesSearch = nameForSearch
         .toLowerCase()
@@ -97,7 +119,6 @@ export default function Dashboard() {
     });
   }, [deals, searchTerm, filterStage, filterStatus]);
 
-  const userId = auth.currentUser?.uid;
 
   const handleDragEnd = async (result) => {
     if (!result.destination) return;
@@ -106,15 +127,16 @@ export default function Dashboard() {
     const newStage = result.destination.droppableId;
 
     try {
-      await updateDeal(userId, dealId, {
-        stage: newStage,
-      });
-
       setDeals((prevDeals) =>
         prevDeals.map((deal) =>
           deal.id === dealId ? { ...deal, stage: newStage } : deal,
         ),
       );
+      
+      await updateDeal( dealId, {
+        stage: newStage,
+      });
+
     } catch (err) {
       console.error(err);
     }
